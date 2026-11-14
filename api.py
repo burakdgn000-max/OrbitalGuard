@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 import datetime
 import math
 import socket
@@ -122,3 +123,109 @@ def nasa_uyari_paketi_olustur(yuksek_riskli_df, tarih_str, test_modu=False):
         "high_risk_object_count": len(hedefler),
         "targets": hedefler
     }
+=======
+import requests
+import pandas as pd
+import numpy as np
+
+def get_neo_data(start_date, end_date, api_key="DEMO_KEY"):
+    """
+    NASA NEO API'sinden belirtilen tarih aralığındaki asteroit verilerini çeker 
+    ve işlenmiş bir Pandas DataFrame döndürür.
+    """
+    url = f"https://api.nasa.gov/neo/rest/v1/feed?start_date={start_date}&end_date={end_date}&api_key={api_key}"
+    
+    try:
+        response = requests.get(url)
+        if response.status_code != 200:
+            print(f"API Hatası: {response.status_code}")
+            return None
+            
+        data = response.json()
+        near_earth_objects = data.get("near_earth_objects", {})
+        
+        asteroids_list = []
+        
+        # Günlük döngü (NASA API verileri tarihlere göre gruplar)
+        for date_key, ast_array in near_earth_objects.items():
+            for ast in ast_array:
+                name = ast.get("name")
+                id_val = ast.get("id")
+                is_hazardous = ast.get("is_potentially_hazardous_asteroid", False)
+                
+                # Çap bilgileri (Kilometre cinsinden ortalama)
+                diameter_min = ast.get("estimated_diameter", {}).get("kilometers", {}).get("estimated_diameter_min", 0)
+                diameter_max = ast.get("estimated_diameter", {}).get("kilometers", {}).get("estimated_diameter_max", 0)
+                avg_diameter = (diameter_min + diameter_max) / 2
+                
+                # Yaklaşma ve Hız Bilgileri (İlk yaklaşma verisini baz alıyoruz)
+                close_approach_data = ast.get("close_approach_data", [])
+                if close_approach_data:
+                    cad = close_approach_data[0]
+                    miss_distance_km = float(cad.get("miss_distance", {}).get("kilometers", 0))
+                    speed_km_s = float(cad.get("relative_velocity", {}).get("kilometers_per_second", 0))
+                    approach_date = cad.get("calendar_date_full", cad.get("close_approach_date", ""))
+                else:
+                    miss_distance_km = 0.0
+                    speed_km_s = 0.0
+                    approach_date = ""
+
+                asteroids_list.append({
+                    "ID": id_val,
+                    "Name": name,
+                    "Hazardous": is_hazardous,
+                    "Diameter_Km": round(avg_diameter, 3),
+                    "Miss_Distance_Km": round(miss_distance_km, 2),
+                    "Speed_Km_s": round(speed_km_s, 2),
+                    "Approach_Date": approach_date
+                })
+                
+        df = pd.DataFrame(asteroids_list)
+        return df
+
+    except Exception as e:
+        print(f"Veri çekilirken hata oluştu: {e}")
+        return None
+
+def calculate_risk_score(df):
+    """
+    Asteroitlerin mesafe ve hızına göre 0-100 arası 'Orbital Risk Skoru' hesaplar.
+    """
+    if df is None or df.empty:
+        return df
+        
+    max_dist = df["Miss_Distance_Km"].max() if df["Miss_Distance_Km"].max() > 0 else 1
+    max_speed = df["Speed_Km_s"].max() if df["Speed_Km_s"].max() > 0 else 1
+    
+    dist_score = 1 - (df["Miss_Distance_Km"] / max_dist)
+    speed_score = df["Speed_Km_s"] / max_speed
+    
+    hazard_multiplier = df["Hazardous"].astype(int) * 0.4
+    
+    raw_score = (dist_score * 0.3) + (speed_score * 0.3) + hazard_multiplier
+    
+    df["Risk_Score"] = (raw_score * 100).round(1)
+    df = df.sort_values(by="Risk_Score", ascending=False).reset_index(drop=True)
+    return df
+
+def get_summary_metrics(df):
+    """
+    DataFrame üzerinden jüri için özet metrikleri hesaplar.
+    """
+    if df is None or df.empty:
+        return 0, 0, 0.0
+    
+    total_count = len(df)
+    hazardous_count = int(df["Hazardous"].sum())
+    max_risk = float(df["Risk_Score"].max()) if "Risk_Score" in df.columns else 0.0
+    
+    return total_count, hazardous_count, max_risk
+
+# Test bloğu en alta alındı
+if __name__ == "__main__":
+    print("NASA API test ediliyor...")
+    test_df = get_neo_data("2026-11-14", "2026-11-14", api_key="nfKCCpwTCJpNDMtfTKm9MF8Ct768M9Hg7RL69NgJ")
+    if test_df is not None:
+        scored_df = calculate_risk_score(test_df)
+        print(scored_df.head())
+>>>>>>> Stashed changes
