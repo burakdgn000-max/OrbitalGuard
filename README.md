@@ -41,5 +41,21 @@ Follow these steps to run OrbitalGuard locally on your machine:
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/burakdgn000-max/OrbitalGurad.git](https://github.com/burakdgn000-max/OrbitalGurad.git)
-   cd OrbitalGurad
+   ## 📂 Project Structure
+
+```text
+OrbitalGuard/
+│
+├── api.py          # NASA API integration, mass calculations, and risk algorithms
+├── app.py          # Streamlit user interface, dashboard metrics, and detail views
+└── README.md       # Project documentation
+
+👥 Team
+Developed with passion for the NASA Space Apps Challenge 2026.
+
+Burak Doğan
+Burak Erşahin
+
+
+git clone [https://github.com/burakdgn000-max/OrbitalGurad.git](https://github.com/burakdgn000-max/OrbitalGurad.git)
+cd OrbitalGurad
