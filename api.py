@@ -1,143 +1,166 @@
 import datetime
 import math
-import socket
-import requests
+import uuid
 import pandas as pd
-import urllib3.util.connection as urllib3_cn
-
-# Force direct IPv4 connection to prevent IPv6 hanging issues
-def _force_ipv4():
-    return socket.AF_INET
-
-urllib3_cn.allowed_gai_family = _force_ipv4
+import requests
 
 
 def get_neo_data(start_date, end_date, api_key="DEMO_KEY"):
-    """
-    Fetches near-Earth asteroid data from the NASA NEO API for the specified date range 
-    and returns a processed Pandas DataFrame.
-    """
-    url = f"https://api.nasa.gov/neo/rest/v1/feed?start_date={start_date}&end_date={end_date}&api_key={api_key}"
-    
+    """NASA NeoWs API üzerinden belirtilen tarih aralığındaki asteroit verilerini çeker."""
+    url = "https://api.nasa.gov/neo/rest/v1/feed"
+    params = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "api_key": api_key,
+    }
+
     try:
-        response = requests.get(url, timeout=(5, 8))
+        response = requests.get(url, params=params, timeout=15)
         if response.status_code != 200:
-            return None, f"NASA API Error Code: {response.status_code}"
+            return None, f"NASA API Hatası (HTTP {response.status_code}): {response.text}"
 
         data = response.json()
         near_earth_objects = data.get("near_earth_objects", {})
 
-        asteroids = []
-        for date_str, neo_list in near_earth_objects.items():
-            for neo in neo_list:
-                approaches = neo.get("close_approach_data") or [{}]
-                approach = approaches[0]
+        kayitlar = []
+        # Ortalama kondritik asteroit yoğunluğu: 2.6 g/cm³ = 2.6 * 10^9 ton/km³
+        yogunluk_ton_km3 = 2.6e9
 
-                diameter = neo.get("estimated_diameter", {}).get("kilometers", {})
-                min_d = float(diameter.get("estimated_diameter_min", 0))
-                max_d = float(diameter.get("estimated_diameter_max", 0))
-                avg_diameter_km = (min_d + max_d) / 2
+        for tarih_anahtari, neo_listesi in near_earth_objects.items():
+            for neo in neo_listesi:
+                neo_id = str(neo.get("id", ""))
+                ad = neo.get("name", "Bilinmeyen Cisim")
+                pha = bool(neo.get("is_potentially_hazardous_asteroid", False))
 
-                # Mass calculation using spherical asteroid model and average rock density (2.6 g/cm³ = 2600 kg/m³)
-                radius_m = (avg_diameter_km * 1000) / 2
-                volume_m3 = (4 / 3) * math.pi * (radius_m ** 3)
-                mass_tons = (volume_m3 * 2600) / 1000
+                cap_bilgisi = neo.get("estimated_diameter", {}).get("kilometers", {})
+                min_cap = float(cap_bilgisi.get("estimated_diameter_min", 0.0))
+                max_cap = float(cap_bilgisi.get("estimated_diameter_max", 0.0))
+                ort_cap_km = round((min_cap + max_cap) / 2.0, 4)
 
-                velocity_kms = float(approach.get("relative_velocity", {}).get("kilometers_per_second", 0))
-                miss_distance_ld = float(approach.get("miss_distance", {}).get("lunar", 0))
-                miss_distance_km = float(approach.get("miss_distance", {}).get("kilometers", 0))
+                # Küre hacim formülü: V = (4/3) * pi * r^3
+                yaricap_km = ort_cap_km / 2.0
+                hacim_km3 = (4.0 / 3.0) * math.pi * (yaricap_km ** 3)
+                tahmini_kutle_ton = round(hacim_km3 * yogunluk_ton_km3, 1)
 
-                asteroids.append({
-                    "ID": neo.get("id"),
-                    "Asteroid Name": neo.get("name"),
-                    "Approach Date": date_str,
-                    "Average Diameter (km)": round(avg_diameter_km, 4),
-                    "Estimated Mass (Tons)": round(mass_tons, 1),
-                    "Velocity (km/s)": round(velocity_kms, 2),
-                    "Closest Approach (LD)": round(miss_distance_ld, 2),
-                    "Closest Approach (km)": round(miss_distance_km, 0),
-                    "Potentially Hazardous": neo.get("is_potentially_hazardous_asteroid", False)
-                })
+                yaklasmalar = neo.get("close_approach_data", [])
+                if not yaklasmalar:
+                    continue
 
-        return pd.DataFrame(asteroids), None
+                ilk_yaklasma = yaklasmalar[0]
+                yaklasma_tarihi = ilk_yaklasma.get("close_approach_date", tarih_anahtari)
+                hiz_kms = round(
+                    float(ilk_yaklasma.get("relative_velocity", {}).get("kilometers_per_second", 0.0)),
+                    2,
+                )
+                mesafe_ld = round(
+                    float(ilk_yaklasma.get("miss_distance", {}).get("lunar", 0.0)),
+                    2,
+                )
+                mesafe_km = round(
+                    float(ilk_yaklasma.get("miss_distance", {}).get("kilometers", 0.0)),
+                    0,
+                )
+
+                kayitlar.append(
+                    {
+                        "ID": neo_id,
+                        "Asteroit Adı": ad,
+                        "Yaklaşma Tarihi": yaklasma_tarihi,
+                        "Ortalama Çap (km)": ort_cap_km,
+                        "Tahmini Kütle (Ton)": tahmini_kutle_ton,
+                        "Hız (km/s)": hiz_kms,
+                        "En Yakın Mesafe (LD)": mesafe_ld,
+                        "En Yakın Mesafe (km)": mesafe_km,
+                        "Potansiyel Tehlikeli": pha,
+                    }
+                )
+
+        if not kayitlar:
+            return pd.DataFrame(), None
+
+        df = pd.DataFrame(kayitlar)
+        return df, None
+
+    except requests.exceptions.Timeout:
+        return None, "NASA sunucusuna bağlanırken zaman aşımı (Timeout) oluştu. Lütfen tekrar deneyin."
+    except requests.exceptions.RequestException as e:
+        return None, f"Ağ bağlantı hatası: {e}"
     except Exception as e:
-        return None, f"Connection Error: {e}"
+        return None, f"Veri işleme hatası: {e}"
 
 
 def calculate_risk_score(df):
-    """
-    Calculates orbital risk scores and threat levels for asteroids.
-    """
-    scored_df = df.copy()
+    """Mesafe, çap, hız ve PHA durumuna göre 0-100 arası çok kriterli risk skoru hesaplar."""
+    sonuc_df = df.copy()
+    skorlar = []
+    seviyeler = []
 
-    # Backwards compatibility check for cached data
-    if "Estimated Mass (Tons)" not in scored_df.columns:
-        radius_m = (scored_df["Average Diameter (km)"] * 1000) / 2
-        scored_df["Estimated Mass (Tons)"] = (((4 / 3) * math.pi * (radius_m ** 3) * 2600) / 1000).round(1)
+    for _, row in sonuc_df.iterrows():
+        mesafe_ld = max(float(row["En Yakın Mesafe (LD)"]), 0.01)
+        cap_km = float(row["Ortalama Çap (km)"])
+        hiz_kms = float(row["Hız (km/s)"])
+        pha = bool(row["Potansiyel Tehlikeli"])
 
-    if "Closest Approach (LD)" not in scored_df.columns and "Mesafe (Ay Mesafesi - LD)" in scored_df.columns:
-        scored_df["Closest Approach (LD)"] = scored_df["Mesafe (Ay Mesafesi - LD)"]
-        scored_df = scored_df.drop(columns=["Mesafe (Ay Mesafesi - LD)"])
+        # 1. Yakınlık puanı (Maks 40 puan - 1 LD ve altı maksimum tehdit)
+        mesafe_puani = min(40.0, (1.0 / (mesafe_ld ** 0.65)) * 22.0)
 
-    if "Closest Approach (km)" not in scored_df.columns and "Mesafe (km)" in scored_df.columns:
-        scored_df["Closest Approach (km)"] = scored_df["Mesafe (km)"]
-        scored_df = scored_df.drop(columns=["Mesafe (km)"])
+        # 2. Boyut / Kütle puanı (Maks 30 puan - 1 km çap ve üzeri maksimum)
+        cap_puani = min(30.0, (cap_km / 0.8) * 30.0)
 
-    raw_score = (
-        (scored_df["Average Diameter (km)"] * 50) + (scored_df["Velocity (km/s)"] * 1.5)
-    ) / (scored_df["Closest Approach (LD)"] + 0.1)
+        # 3. Kinetik hız puanı (Maks 20 puan - 35 km/s referans)
+        hiz_puani = min(20.0, (hiz_kms / 35.0) * 20.0)
 
-    hazard_multiplier = scored_df["Potentially Hazardous"].apply(lambda x: 1.5 if x else 1.0)
-    scored_df["Risk Score (0-100)"] = (raw_score * hazard_multiplier * 10).clip(upper=100).round(2)
+        # 4. NASA PHA statü bonusu (10 puan)
+        pha_puani = 10.0 if pha else 0.0
 
-    def determine_threat_level(score):
-        if score >= 70:
-            return "High Risk"
-        elif score >= 35:
-            return "Medium Risk"
-        return "Low Risk"
+        toplam_skor = round(min(100.0, mesafe_puani + cap_puani + hiz_puani + pha_puani), 2)
+        skorlar.append(toplam_skor)
 
-    scored_df["Threat Level"] = scored_df["Risk Score (0-100)"].apply(determine_threat_level)
-    scored_df = scored_df.sort_values(by="Risk Score (0-100)", ascending=False).reset_index(drop=True)
-    return scored_df
+        if toplam_skor >= 70.0:
+            seviyeler.append("Yüksek Risk")
+        elif toplam_skor >= 35.0:
+            seviyeler.append("Orta Risk")
+        else:
+            seviyeler.append("Düşük Risk")
+
+    sonuc_df["Risk Skoru (0-100)"] = skorlar
+    sonuc_df["Tehlike Seviyesi"] = seviyeler
+    sonuc_df = sonuc_df.sort_values(by="Risk Skoru (0-100)", ascending=False).reset_index(drop=True)
+    return sonuc_df
 
 
-def nasa_alert_package_generator(high_risk_df, date_str, test_mode=False):
-    """Generates a NASA PDCO telemetry alert package for asteroids hitting the high-risk threshold (70+)."""
-    transmission_time = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    targets = []
-    for _, row in high_risk_df.iterrows():
-        targets.append({
-            "neo_id": str(row["ID"]),
-            "name": row["Asteroid Name"],
-            "risk_score": float(row["Risk Score (0-100)"]),
-            "threat_level": row["Threat Level"],
-            "estimated_diameter_km": float(row["Average Diameter (km)"]),
-            "estimated_mass_tons": float(row["Estimated Mass (Tons)"]),
-            "relative_velocity_kms": float(row["Velocity (km/s)"]),
-            "closest_approach_ld": float(row["Closest Approach (LD)"]),
-            "closest_approach_km": float(row["Closest Approach (km)"])
-        })
+def nasa_uyari_paketi_olustur(yuksek_riskli_df, analiz_tarihi, test_modu=False):
+    """Risk skoru 70 ve üzerindeki cisimler için NASA PDCO telemetri uyarı paketi üretir."""
+    zaman_damgasi = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    uyari_kodu = f"PDCO-ALT-{uuid.uuid4().hex[:8].upper()}"
+
+    cisimler = []
+    for _, row in yuksek_riskli_df.iterrows():
+        cisimler.append(
+            {
+                "neo_id": str(row["ID"]),
+                "designation": str(row["Asteroit Adı"]),
+                "close_approach_date": str(row["Yaklaşma Tarihi"]),
+                "risk_score": float(row["Risk Skoru (0-100)"]),
+                "threat_level": str(row["Tehlike Seviyesi"]),
+                "miss_distance_ld": float(row["En Yakın Mesafe (LD)"]),
+                "miss_distance_km": float(row["En Yakın Mesafe (km)"]),
+                "relative_velocity_kms": float(row["Hız (km/s)"]),
+                "mean_diameter_km": float(row["Ortalama Çap (km)"]),
+                "estimated_mass_tons": float(row["Tahmini Kütle (Ton)"]),
+                "potentially_hazardous": bool(row["Potansiyel Tehlikeli"]),
+            }
+        )
 
     return {
-        "alert_id": f"NASA-PDCO-{date_str.replace('-', '')}-{'TEST' if test_mode else 'AUTO'}",
-        "status": "TRANSMITTED",
-        "mode": "SIMULATION_TEST" if test_mode else "AUTOMATIC_THRESHOLD_TRIGGER",
+        "alert_id": uyari_kodu,
+        "protocol": "NASA-PDCO-TELEMETRY-v1.2",
+        "source_system": "OrbitalGuard NEO Risk Simulator",
+        "simulation_test_mode": bool(test_modu),
+        "analysis_date": analiz_tarihi,
+        "transmitted_at": zaman_damgasi,
         "recipient": "NASA Planetary Defense Coordination Office (PDCO)",
-        "trigger_rule": "Risk Score >= 70 (High Risk Threshold)",
-        "observation_date": date_str,
-        "transmitted_at": transmission_time,
-        "high_risk_object_count": len(targets),
-        "targets": targets
+        "alert_threshold": 70.0,
+        "detected_high_risk_count": len(cisimler),
+        "objects": cisimler,
     }
-
-
-# Test block
-if __name__ == "__main__":
-    print("Testing NASA API...")
-    test_df, err = get_neo_data("2026-11-14", "2026-11-14", api_key="nfKCCpwTCJpNDMtfTKm9MF8Ct768M9Hg7RL69NgJ")
-    if test_df is not None:
-        scored_df = calculate_risk_score(test_df)
-        print(scored_df.head())
-    else:
-        print(err)
